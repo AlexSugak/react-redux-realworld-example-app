@@ -1,7 +1,11 @@
 import ListErrors from './ListErrors'
 import React from 'react'
+import { push } from 'react-router-redux'
+import { ReadOnlyAtom, Atom, F } from '@grammarly/focal'
+import * as Rx from 'rxjs/operators'
+import { store } from '../store'
+
 import agent from '../agent'
-import { connect } from 'react-redux'
 import {
   ADD_TAG,
   EDITOR_PAGE_LOADED,
@@ -9,41 +13,145 @@ import {
   ARTICLE_SUBMITTED,
   EDITOR_PAGE_UNLOADED,
   UPDATE_FIELD_EDITOR,
+  REDIRECT,
 } from '../constants/actionTypes'
 
-const mapStateToProps = (state: any) => ({
-  ...state.editor,
-})
-
-const mapDispatchToProps = (dispatch: any) => ({
-  onAddTag: () => dispatch({ type: ADD_TAG }),
-  onLoad: (payload: any) => dispatch({ type: EDITOR_PAGE_LOADED, payload }),
-  onRemoveTag: (tag: any) => dispatch({ type: REMOVE_TAG, tag }),
-  onSubmit: (payload: any) => dispatch({ type: ARTICLE_SUBMITTED, payload }),
-  onUnload: () => dispatch({ type: EDITOR_PAGE_UNLOADED }),
-  onUpdateField: (key: any, value: any) => dispatch({ type: UPDATE_FIELD_EDITOR, key, value }),
-})
-
-interface EditorProps {
-  onAddTag: () => void,
-  onLoad: (payload: any) => void,
-  onRemoveTag: (tag: any) => void,
-  onSubmit: (payload: any) => void,
-  onUnload: () => void,
-  onUpdateField: (key: any, value: any) => void,
-  match: any
+interface EditorState {
   errors: any[]
   inProgress: boolean
 
-  articleSlug: string,
-  title: string,
-  description: string,
-  body: string,
-  tagInput: string,
+  articleSlug?: string
+  title: string
+  description: string
+  body: string
+  tagInput: string
   tagList: string[]
 }
 
-class Editor extends React.Component<EditorProps> {
+const initialState: EditorState = {
+  errors: [],
+  inProgress: false,
+  articleSlug: undefined,
+  title: '',
+  description: '',
+  body: '',
+  tagInput: '',
+  tagList: [],
+}
+
+interface EditorProps {
+  onAddTag: () => void
+  onLoad: (slug: string) => void
+  onRemoveTag: (tag: any) => void
+  onSubmit: () => void
+  onUnload: () => void
+  onUpdateField: (key: any, value: any) => void
+  state: ReadOnlyAtom<EditorState>
+}
+
+interface MatchProps {
+  match: any
+}
+
+function redirect(url: string) {
+  store.dispatch(push(url))
+}
+
+function connectFocal(
+  EditorComponent: React.ComponentType<EditorProps & any>
+): React.ComponentType<EditorProps & any> {
+  const state = Atom.create(initialState)
+  const inProgress = state.lens('inProgress')
+  const errors = state.lens('errors')
+
+  const updateState = (update: (stateInput: EditorState) => EditorState): void => {
+    state.set(update(state.get()))
+  }
+
+  const updateStateAsync = (
+    update: (currentState: EditorState, result: any) => EditorState,
+    action: (currentState: EditorState) => Promise<any>,
+    onSuccess?: (currentState: EditorState) => void
+  ): void => {
+    inProgress.set(true)
+
+    action(state.get()).then(
+      (res) => {
+        console.log('RESULT', res)
+        updateState((s) => update(s, res))
+        inProgress.set(false)
+        if (onSuccess){
+          onSuccess(state.get())
+        } 
+      },
+      (error) => {
+        console.log('ERROR', error)
+        inProgress.set(false)
+        errors.set(error.response.body.errors ? error.response.body.errors : null)
+      }
+    )
+
+    return
+  }
+
+  return (({...props}) => 
+    <EditorComponent
+      {...props}
+      onAddTag={() =>
+        updateState((s) => ({ ...s, tagInput: '', tagList: s.tagList.concat([s.tagInput]) }))
+      }
+      onRemoveTag={(tag: string) =>
+        updateState((s) => ({ ...s, tagList: s.tagList.filter((t) => t !== tag) }))
+      }
+      onUnload={() => updateState(() => initialState)}
+      onUpdateField={(key: string, value: any) =>
+        updateState((s) => {
+          return { ...s, [key]: value }
+        })
+      }
+      onLoad={(slug: string) => {
+        updateStateAsync(
+          (s, resp) => ({
+            ...s,
+            articleSlug: resp.article.slug,
+            title: resp.article.title,
+            description: resp.article.description,
+            body: resp.article.body,
+            tagInput: '',
+            tagList: resp.article.tagList,
+          }),
+          () => agent.Articles.get(slug)
+        )
+      }}
+      onSubmit={() => {
+        updateStateAsync(
+          (s, resp) => {
+            return { ...s, inProgress: false, articleSlug: resp.article.slug }
+          },
+          (s) => {
+            const article = {
+              title: s.title,
+              description: s.description,
+              body: s.body,
+              tagList: s.tagList,
+            }
+
+            return s.articleSlug
+              ? agent.Articles.update({...article, slug: s.articleSlug })
+              : agent.Articles.create(article)
+          },
+          s => {
+            const redirectUrl = `/article/${s.articleSlug}`
+            redirect(redirectUrl)
+          }
+        )
+      }}
+      state={state}
+    />
+  )
+}
+
+class Editor extends React.Component<EditorProps & MatchProps> {
   changeTitle: (ev: any) => void
   changeDescription: (ev: any) => void
   changeBody: (ev: any) => void
@@ -52,10 +160,11 @@ class Editor extends React.Component<EditorProps> {
   removeTagHandler: (tag: any) => () => void
   submitForm: (ev: any) => void
 
-  constructor(props: EditorProps) {
+  constructor(props: EditorProps & MatchProps) {
     super(props)
 
-    const updateFieldEvent = (key: any) => (ev: any) => this.props.onUpdateField(key, ev.target.value)
+    const updateFieldEvent = (key: any) => (ev: any) =>
+      this.props.onUpdateField(key, ev.target.value)
     this.changeTitle = updateFieldEvent('title')
     this.changeDescription = updateFieldEvent('description')
     this.changeBody = updateFieldEvent('body')
@@ -74,19 +183,7 @@ class Editor extends React.Component<EditorProps> {
 
     this.submitForm = (ev) => {
       ev.preventDefault()
-      const article = {
-        title: this.props.title,
-        description: this.props.description,
-        body: this.props.body,
-        tagList: this.props.tagList,
-      }
-
-      const slug = { slug: this.props.articleSlug }
-      const promise = this.props.articleSlug
-        ? agent.Articles.update(Object.assign(article, slug))
-        : agent.Articles.create(article)
-
-      this.props.onSubmit(promise)
+      this.props.onSubmit()
     }
   }
 
@@ -94,17 +191,15 @@ class Editor extends React.Component<EditorProps> {
     if (this.props.match.params.slug !== nextProps.match.params.slug) {
       if (nextProps.match.params.slug) {
         this.props.onUnload()
-        return this.props.onLoad(agent.Articles.get(this.props.match.params.slug))
+        return this.props.onLoad(this.props.match.params.slug)
       }
-      this.props.onLoad(null)
     }
   }
 
   componentWillMount() {
     if (this.props.match.params.slug) {
-      return this.props.onLoad(agent.Articles.get(this.props.match.params.slug))
+      return this.props.onLoad(this.props.match.params.slug)
     }
-    this.props.onLoad(null)
   }
 
   componentWillUnmount() {
@@ -112,75 +207,93 @@ class Editor extends React.Component<EditorProps> {
   }
 
   render() {
+    const state = this.props.state
+    const errors = state.view('errors')
+    const title = state.view('title')
+    const description = state.view('description')
+    const body = state.view('body')
+    const tagInput = state.view('tagInput')
+    const tagList = state.view('tagList')
+    const inProgress = state.view('inProgress')
+
     return (
       <div className="editor-page">
         <div className="container page">
           <div className="row">
             <div className="col-md-10 offset-md-1 col-xs-12">
-              <ListErrors errors={this.props.errors}></ListErrors>
+              <F.Fragment>
+                {errors.pipe(Rx.map((errors) => <ListErrors errors={errors}></ListErrors>))}
+              </F.Fragment>
 
               <form>
                 <fieldset>
                   <fieldset className="form-group">
-                    <input
+                    <F.input
                       className="form-control form-control-lg"
                       type="text"
                       placeholder="Article Title"
-                      value={this.props.title}
+                      value={title}
                       onChange={this.changeTitle}
                     />
                   </fieldset>
 
                   <fieldset className="form-group">
-                    <input
+                    <F.input
                       className="form-control"
                       type="text"
                       placeholder="What's this article about?"
-                      value={this.props.description}
+                      value={description}
                       onChange={this.changeDescription}
                     />
                   </fieldset>
 
                   <fieldset className="form-group">
-                    <textarea
+                    <F.textarea
                       className="form-control"
                       rows={8}
                       placeholder="Write your article (in markdown)"
-                      value={this.props.body}
+                      value={body}
                       onChange={this.changeBody}
-                    ></textarea>
+                    />
                   </fieldset>
 
                   <fieldset className="form-group">
-                    <input
+                    <F.input
                       className="form-control"
                       type="text"
                       placeholder="Enter tags"
-                      value={this.props.tagInput}
+                      value={tagInput}
                       onChange={this.changeTagInput}
                       onKeyUp={this.watchForEnter}
                     />
 
-                    <div className="tag-list">
-                      {(this.props.tagList || []).map((tag) => {
-                        return (
-                          <span className="tag-default tag-pill" key={tag}>
-                            <i className="ion-close-round" onClick={this.removeTagHandler(tag)}></i>
-                            {tag}
-                          </span>
+                    <F.div className="tag-list">
+                      {tagList.pipe(
+                        Rx.map((tagList) =>
+                          tagList.map((tag) => {
+                            return (
+                              <span className="tag-default tag-pill" key={tag}>
+                                <i
+                                  className="ion-close-round"
+                                  onClick={this.removeTagHandler(tag)}
+                                ></i>
+                                {tag}
+                              </span>
+                            )
+                          })
                         )
-                      })}
-                    </div>
+                      )}
+                    </F.div>
                   </fieldset>
 
-                  <button
+                  <F.button
                     className="btn btn-lg pull-xs-right btn-primary"
                     type="button"
-                    disabled={this.props.inProgress}
+                    disabled={inProgress}
                     onClick={this.submitForm}
                   >
                     Publish Article
-                  </button>
+                  </F.button>
                 </fieldset>
               </form>
             </div>
@@ -191,4 +304,4 @@ class Editor extends React.Component<EditorProps> {
   }
 }
 
-export default connect(mapStateToProps, mapDispatchToProps)(Editor)
+export default connectFocal(Editor)
