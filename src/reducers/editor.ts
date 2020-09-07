@@ -8,7 +8,16 @@ import {
   UPDATE_FIELD_EDITOR,
 } from '../constants/actionTypes'
 
-export default (state: any = {}, action: any) => {
+const initialState = {
+  articleSlug: '',
+  title: '',
+  description: '',
+  body: '',
+  tagInput: '',
+  tagList: []
+}
+
+export default (state: any = initialState, action: any) => {
   switch (action.type) {
     case EDITOR_PAGE_LOADED:
       return {
@@ -21,7 +30,7 @@ export default (state: any = {}, action: any) => {
         tagList: action.payload ? action.payload.article.tagList : [],
       }
     case EDITOR_PAGE_UNLOADED:
-      return {}
+      return initialState
     case ARTICLE_SUBMITTED:
       return {
         ...state,

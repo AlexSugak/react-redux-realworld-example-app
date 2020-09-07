@@ -11,24 +11,51 @@ import {
   UPDATE_FIELD_EDITOR,
 } from '../constants/actionTypes'
 
-const mapStateToProps = (state) => ({
+const mapStateToProps = (state: any) => ({
   ...state.editor,
 })
 
-const mapDispatchToProps = (dispatch) => ({
+const mapDispatchToProps = (dispatch: any) => ({
   onAddTag: () => dispatch({ type: ADD_TAG }),
-  onLoad: (payload) => dispatch({ type: EDITOR_PAGE_LOADED, payload }),
-  onRemoveTag: (tag) => dispatch({ type: REMOVE_TAG, tag }),
-  onSubmit: (payload) => dispatch({ type: ARTICLE_SUBMITTED, payload }),
-  onUnload: (payload) => dispatch({ type: EDITOR_PAGE_UNLOADED }),
-  onUpdateField: (key, value) => dispatch({ type: UPDATE_FIELD_EDITOR, key, value }),
+  onLoad: (payload: any) => dispatch({ type: EDITOR_PAGE_LOADED, payload }),
+  onRemoveTag: (tag: any) => dispatch({ type: REMOVE_TAG, tag }),
+  onSubmit: (payload: any) => dispatch({ type: ARTICLE_SUBMITTED, payload }),
+  onUnload: () => dispatch({ type: EDITOR_PAGE_UNLOADED }),
+  onUpdateField: (key: any, value: any) => dispatch({ type: UPDATE_FIELD_EDITOR, key, value }),
 })
 
-class Editor extends React.Component {
-  constructor() {
-    super()
+interface EditorProps {
+  onAddTag: () => void,
+  onLoad: (payload: any) => void,
+  onRemoveTag: (tag: any) => void,
+  onSubmit: (payload: any) => void,
+  onUnload: () => void,
+  onUpdateField: (key: any, value: any) => void,
+  match: any
+  errors: any[]
+  inProgress: boolean
 
-    const updateFieldEvent = (key) => (ev) => this.props.onUpdateField(key, ev.target.value)
+  articleSlug: string,
+  title: string,
+  description: string,
+  body: string,
+  tagInput: string,
+  tagList: string[]
+}
+
+class Editor extends React.Component<EditorProps> {
+  changeTitle: (ev: any) => void
+  changeDescription: (ev: any) => void
+  changeBody: (ev: any) => void
+  changeTagInput: (ev: any) => void
+  watchForEnter: (ev: any) => void
+  removeTagHandler: (tag: any) => () => void
+  submitForm: (ev: any) => void
+
+  constructor(props: EditorProps) {
+    super(props)
+
+    const updateFieldEvent = (key: any) => (ev: any) => this.props.onUpdateField(key, ev.target.value)
     this.changeTitle = updateFieldEvent('title')
     this.changeDescription = updateFieldEvent('description')
     this.changeBody = updateFieldEvent('body')
@@ -63,7 +90,7 @@ class Editor extends React.Component {
     }
   }
 
-  componentWillReceiveProps(nextProps) {
+  componentWillReceiveProps(nextProps: any) {
     if (this.props.match.params.slug !== nextProps.match.params.slug) {
       if (nextProps.match.params.slug) {
         this.props.onUnload()
@@ -117,7 +144,7 @@ class Editor extends React.Component {
                   <fieldset className="form-group">
                     <textarea
                       className="form-control"
-                      rows="8"
+                      rows={8}
                       placeholder="Write your article (in markdown)"
                       value={this.props.body}
                       onChange={this.changeBody}
