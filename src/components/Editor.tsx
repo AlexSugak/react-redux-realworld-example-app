@@ -10,6 +10,7 @@ import agent from '../agent'
 interface EditorState {
   errors: any[]
   inProgress: boolean
+  draftSaved: boolean
 
   articleSlug?: string
   title: string
@@ -22,6 +23,7 @@ interface EditorState {
 const initialState: EditorState = {
   errors: [],
   inProgress: false,
+  draftSaved: false,
   articleSlug: undefined,
   title: '',
   description: '',
@@ -188,6 +190,35 @@ class EditorViewModel {
         },
         handleError
       )
+
+
+    const saveDraft = (_state: EditorState): Promise<any> => {
+      // emulate saving draft API call
+      return new Promise(resolve => setTimeout(resolve, 500))
+    } 
+
+    const draftSaved = this._state.lens('draftSaved')
+
+    // save draft
+    actions.pipe(
+      Rx.filter(
+        (a) =>
+          [
+            EditorActions.ADD_TAG,
+            EditorActions.REMOVE_TAG,
+            EditorActions.UPDATE_FIELD_EDITOR,
+          ].indexOf(a.kind) >= 0
+      ),
+      Rx.debounceTime(1500),
+      Rx.map(() => this._state.get()),
+      Rx.switchMap(s => saveDraft(s))
+    ).subscribe(
+      () => {
+        // TODO handle race conditions?
+        draftSaved.set(true)
+        setTimeout(() => draftSaved.set(false), 2000)
+      }
+    )
   }
 
   get state(): ReadOnlyAtom<EditorState> {
@@ -300,6 +331,7 @@ class Editor extends React.Component<EditorProps & MatchProps> {
     const tagInput = state.view('tagInput')
     const tagList = state.view('tagList')
     const inProgress = state.view('inProgress')
+    const draftSaved = state.view('draftSaved')
 
     return (
       <div className="editor-page">
@@ -371,14 +403,17 @@ class Editor extends React.Component<EditorProps & MatchProps> {
                     </F.div>
                   </fieldset>
 
-                  <F.button
-                    className="btn btn-lg pull-xs-right btn-primary"
-                    type="button"
-                    disabled={inProgress}
-                    onClick={this.submitForm}
-                  >
-                    Publish Article
-                  </F.button>
+                  <div style={{display: 'flex', justifyContent: 'space-between'}}>
+                    <F.div>{draftSaved.pipe(Rx.map(ds => ds ? 'Draft Saved': null))}</F.div>
+                    <F.button
+                      className="btn btn-lg pull-xs-right btn-primary"
+                      type="button"
+                      disabled={inProgress}
+                      onClick={this.submitForm}
+                    >
+                      Publish Article
+                    </F.button>
+                  </div>
                 </fieldset>
               </form>
             </div>
