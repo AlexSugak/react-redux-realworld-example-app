@@ -3,18 +3,9 @@ import React from 'react'
 import { push } from 'react-router-redux'
 import { ReadOnlyAtom, Atom, F } from '@grammarly/focal'
 import * as Rx from 'rxjs/operators'
+import { Subject } from 'rxjs'
 import { store } from '../store'
-
 import agent from '../agent'
-import {
-  ADD_TAG,
-  EDITOR_PAGE_LOADED,
-  REMOVE_TAG,
-  ARTICLE_SUBMITTED,
-  EDITOR_PAGE_UNLOADED,
-  UPDATE_FIELD_EDITOR,
-  REDIRECT,
-} from '../constants/actionTypes'
 
 interface EditorState {
   errors: any[]
@@ -39,6 +30,171 @@ const initialState: EditorState = {
   tagList: [],
 }
 
+enum EditorActions {
+  ADD_TAG = 'ADD_TAG',
+  EDITOR_PAGE_LOADED = 'EDITOR_PAGE_LOADED',
+  REMOVE_TAG = 'REMOVE_TAG',
+  ARTICLE_SUBMITTED = 'ARTICLE_SUBMITTED',
+  EDITOR_PAGE_UNLOADED = 'EDITOR_PAGE_UNLOADED',
+  UPDATE_FIELD_EDITOR = 'UPDATE_FIELD_EDITOR',
+}
+
+type AddTag = {
+  kind: EditorActions.ADD_TAG
+}
+
+type RemoveTag = {
+  kind: EditorActions.REMOVE_TAG
+  tag: string
+}
+
+type LoadArticle = {
+  kind: EditorActions.EDITOR_PAGE_LOADED
+  slug: string
+}
+
+type UpdateEditorField = {
+  kind: EditorActions.UPDATE_FIELD_EDITOR
+  key: string
+  value: any
+}
+
+type UnloadArticle = {
+  kind: EditorActions.EDITOR_PAGE_UNLOADED
+}
+
+type SubmitArticle = {
+  kind: EditorActions.ARTICLE_SUBMITTED
+}
+
+type EditorAction =
+  | LoadArticle
+  | AddTag
+  | RemoveTag
+  | UpdateEditorField
+  | SubmitArticle
+  | UnloadArticle
+
+function isLoadArticleAction(action: EditorAction): action is LoadArticle {
+  return action.kind === EditorActions.EDITOR_PAGE_LOADED
+}
+
+function isSubmitArticle(action: EditorAction): action is SubmitArticle {
+  return action.kind === EditorActions.ARTICLE_SUBMITTED
+}
+
+class EditorViewModel {
+  constructor(
+    public actions: Subject<EditorAction> = new Subject<EditorAction>(),
+    private _state: Atom<EditorState> = Atom.create<EditorState>(initialState)
+  ) {
+    const inProgress = this._state.lens('inProgress')
+    const errors = this._state.lens('errors')
+
+    const w = window as any
+    w.getState = () => this._state.get()
+
+    const handleError = (error: any) => {
+      console.log('ERROR', error)
+      errors.set(
+        error.response.body.errors
+          ? error.response.body.errors
+          : error.response.body.error
+          ? {[error.response.body.status]: error.response.body.error}
+          : {['0']: 'unknown error'}
+      )
+    }
+
+    // actions without side-effects
+    actions
+      .pipe(
+        Rx.filter(
+          (a) =>
+            [
+              EditorActions.ADD_TAG,
+              EditorActions.REMOVE_TAG,
+              EditorActions.UPDATE_FIELD_EDITOR,
+              EditorActions.EDITOR_PAGE_UNLOADED,
+            ].indexOf(a.kind) >= 0
+        ),
+        Rx.withLatestFrom(this._state),
+        Rx.map(([action, state]) => {
+          switch (action.kind) {
+            case EditorActions.ADD_TAG:
+              return { ...state, tagInput: '', tagList: state.tagList.concat([state.tagInput]) }
+            case EditorActions.REMOVE_TAG:
+              return { ...state, tagList: state.tagList.filter((t) => t !== action.tag) }
+            case EditorActions.UPDATE_FIELD_EDITOR:
+              return { ...state, [action.key]: action.value }
+            case EditorActions.EDITOR_PAGE_UNLOADED:
+              return initialState
+            default:
+              return state
+          }
+        })
+      )
+      .subscribe((state) => {
+        this._state.set(state)
+      })
+
+    // load article
+    actions
+      .pipe(
+        Rx.filter(isLoadArticleAction),
+        Rx.tap(() => inProgress.set(true)),
+        Rx.switchMap((a) => agent.Articles.get(a.slug)),
+        Rx.tap(() => inProgress.set(false))
+      )
+      .subscribe(
+        (resp: any) => {
+          this._state.set({
+            ...this._state.get(),
+            articleSlug: resp.article.slug,
+            title: resp.article.title,
+            description: resp.article.description,
+            body: resp.article.body,
+            tagInput: '',
+            tagList: resp.article.tagList,
+          })
+        },
+        handleError
+      )
+
+    // submit article
+    actions
+      .pipe(
+        Rx.filter(isSubmitArticle),
+        Rx.withLatestFrom(this._state),
+        Rx.tap(() => inProgress.set(true)),
+        Rx.switchMap(([a, s]) => {
+          const article = {
+            title: s.title,
+            description: s.description,
+            body: s.body,
+            tagList: s.tagList,
+          }
+          return s.articleSlug
+            ? agent.Articles.update({ ...article, slug: s.articleSlug })
+            : agent.Articles.create(article)
+        }),
+        Rx.tap(() => inProgress.set(false))
+      )
+      .subscribe(
+        (resp: any) => {
+          const state = this._state.get()
+          const slug = state.articleSlug ? state.articleSlug : resp.article.slug
+          const redirectUrl = `/article/${slug}`
+          redirect(redirectUrl)
+        },
+        handleError
+      )
+  }
+
+  get state(): ReadOnlyAtom<EditorState> {
+    return this._state
+  }
+}
+
 interface EditorProps {
   onAddTag: () => void
   onLoad: (slug: string) => void
@@ -60,93 +216,22 @@ function redirect(url: string) {
 function connectFocal(
   EditorComponent: React.ComponentType<EditorProps & any>
 ): React.ComponentType<EditorProps & any> {
-  const state = Atom.create(initialState)
-  const inProgress = state.lens('inProgress')
-  const errors = state.lens('errors')
+  const editorVM = new EditorViewModel()
 
-  const updateState = (update: (stateInput: EditorState) => EditorState): void => {
-    state.set(update(state.get()))
-  }
-
-  const updateStateAsync = (
-    update: (currentState: EditorState, result: any) => EditorState,
-    action: (currentState: EditorState) => Promise<any>,
-    onSuccess?: (currentState: EditorState) => void
-  ): void => {
-    inProgress.set(true)
-
-    action(state.get()).then(
-      (res) => {
-        console.log('RESULT', res)
-        updateState((s) => update(s, res))
-        inProgress.set(false)
-        if (onSuccess){
-          onSuccess(state.get())
-        } 
-      },
-      (error) => {
-        console.log('ERROR', error)
-        inProgress.set(false)
-        errors.set(error.response.body.errors ? error.response.body.errors : null)
-      }
-    )
-
-    return
-  }
-
-  return (({...props}) => 
+  return ({ ...props }) => (
     <EditorComponent
       {...props}
-      onAddTag={() =>
-        updateState((s) => ({ ...s, tagInput: '', tagList: s.tagList.concat([s.tagInput]) }))
-      }
-      onRemoveTag={(tag: string) =>
-        updateState((s) => ({ ...s, tagList: s.tagList.filter((t) => t !== tag) }))
-      }
-      onUnload={() => updateState(() => initialState)}
+      onAddTag={() => editorVM.actions.next({ kind: EditorActions.ADD_TAG })}
+      onRemoveTag={(tag: string) => editorVM.actions.next({ kind: EditorActions.REMOVE_TAG, tag })}
+      onUnload={() => editorVM.actions.next({ kind: EditorActions.EDITOR_PAGE_UNLOADED })}
       onUpdateField={(key: string, value: any) =>
-        updateState((s) => {
-          return { ...s, [key]: value }
-        })
+        editorVM.actions.next({ kind: EditorActions.UPDATE_FIELD_EDITOR, key, value })
       }
-      onLoad={(slug: string) => {
-        updateStateAsync(
-          (s, resp) => ({
-            ...s,
-            articleSlug: resp.article.slug,
-            title: resp.article.title,
-            description: resp.article.description,
-            body: resp.article.body,
-            tagInput: '',
-            tagList: resp.article.tagList,
-          }),
-          () => agent.Articles.get(slug)
-        )
-      }}
-      onSubmit={() => {
-        updateStateAsync(
-          (s, resp) => {
-            return { ...s, inProgress: false, articleSlug: resp.article.slug }
-          },
-          (s) => {
-            const article = {
-              title: s.title,
-              description: s.description,
-              body: s.body,
-              tagList: s.tagList,
-            }
-
-            return s.articleSlug
-              ? agent.Articles.update({...article, slug: s.articleSlug })
-              : agent.Articles.create(article)
-          },
-          s => {
-            const redirectUrl = `/article/${s.articleSlug}`
-            redirect(redirectUrl)
-          }
-        )
-      }}
-      state={state}
+      onLoad={(slug: string) =>
+        editorVM.actions.next({ kind: EditorActions.EDITOR_PAGE_LOADED, slug })
+      }
+      onSubmit={() => editorVM.actions.next({ kind: EditorActions.ARTICLE_SUBMITTED })}
+      state={editorVM.state}
     />
   )
 }
