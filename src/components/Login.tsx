@@ -2,37 +2,46 @@ import { Link } from 'react-router-dom'
 import ListErrors from './ListErrors'
 import React from 'react'
 import agent from '../agent'
-import { connect } from 'react-redux'
+import { connect, ConnectedProps } from 'react-redux'
 import { UPDATE_FIELD_AUTH, LOGIN, LOGIN_PAGE_UNLOADED } from '../constants/actionTypes'
+import { AuthInitialState, AuthActions } from '../reducers/auth'
 
-const mapStateToProps = (state) => ({ ...state.auth })
+const mapStateToProps = (state: { auth: AuthInitialState }) => ({ ...state.auth })
 
-const mapDispatchToProps = (dispatch) => ({
-  onChangeEmail: (value) => dispatch({ type: UPDATE_FIELD_AUTH, key: 'email', value }),
-  onChangePassword: (value) => dispatch({ type: UPDATE_FIELD_AUTH, key: 'password', value }),
-  onSubmit: (email, password) =>
+const mapDispatchToProps = (dispatch: (action: AuthActions) => void) => ({
+  onChangeEmail: (value: string) => dispatch({ type: UPDATE_FIELD_AUTH, key: 'email', value }),
+  onChangePassword: (value: string) =>
+    dispatch({ type: UPDATE_FIELD_AUTH, key: 'password', value }),
+  onSubmit: (email: string, password: string) =>
     dispatch({ type: LOGIN, payload: agent.Auth.login(email, password) }),
   onUnload: () => dispatch({ type: LOGIN_PAGE_UNLOADED }),
 })
 
-class Login extends React.Component {
-  constructor() {
-    super()
-    this.changeEmail = (ev) => this.props.onChangeEmail(ev.target.value)
-    this.changePassword = (ev) => this.props.onChangePassword(ev.target.value)
-    this.submitForm = (email, password) => (ev) => {
-      ev.preventDefault()
-      this.props.onSubmit(email, password)
-    }
-  }
+const connector = connect(mapStateToProps, mapDispatchToProps)
 
+type LoginProps = ConnectedProps<typeof connector>
+
+class Login extends React.Component<LoginProps> {
   componentWillUnmount() {
     this.props.onUnload()
   }
 
+  changeEmail = (ev: React.ChangeEvent<HTMLInputElement>) =>
+    this.props.onChangeEmail(ev.target.value)
+
+  changePassword = (ev: React.ChangeEvent<HTMLInputElement>) =>
+    this.props.onChangePassword(ev.target.value)
+
+  submitForm = (email: string, password: string) => (ev: React.ChangeEvent<HTMLFormElement>) => {
+    ev.preventDefault()
+    this.props.onSubmit(email, password)
+  }
+
   render() {
-    const email = this.props.email
-    const password = this.props.password
+    const { email, password } = this.props
+
+    console.log('[auth] re-render')
+
     return (
       <div className="auth-page">
         <div className="container page">
@@ -84,4 +93,4 @@ class Login extends React.Component {
   }
 }
 
-export default connect(mapStateToProps, mapDispatchToProps)(Login)
+export default connector(Login)

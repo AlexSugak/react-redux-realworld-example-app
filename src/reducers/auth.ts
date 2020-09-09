@@ -6,8 +6,26 @@ import {
   ASYNC_START,
   UPDATE_FIELD_AUTH,
 } from '../constants/actionTypes'
+import { assertNever } from 'assert-never'
 
-export default (state = {}, action: any) => {
+const authInitialState = {
+  inProgress: false,
+  errors: null as null | string[],
+  email: '',
+  password: '',
+  username: '',
+}
+
+export type AuthInitialState = typeof authInitialState
+export type AuthActions =
+  | { type: 'LOGIN'; payload: any; error?: any }
+  | { type: 'REGISTER'; payload: any; error?: any }
+  | { type: 'LOGIN_PAGE_UNLOADED' }
+  | { type: 'REGISTER_PAGE_UNLOADED' }
+  | { type: 'ASYNC_START'; subtype: AuthActions['type'] }
+  | { type: 'UPDATE_FIELD_AUTH'; key: string; value: string }
+
+export default (state = authInitialState, action: AuthActions) => {
   switch (action.type) {
     case LOGIN:
     case REGISTER:
@@ -27,6 +45,8 @@ export default (state = {}, action: any) => {
     case UPDATE_FIELD_AUTH:
       return { ...state, [action.key]: action.value }
     default:
+      // TS tip: assertNever!
+      void assertNever(action, true)
       return state
   }
 
